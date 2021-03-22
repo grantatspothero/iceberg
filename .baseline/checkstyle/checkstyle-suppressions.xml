@@ -31,4 +31,7 @@
 
     <!-- Referencing guava classes should be allowed in classes within bundled-guava module -->
     <suppress files="org.apache.iceberg.GuavaClasses" id="BanUnrelocatedGuavaClasses"/>
+
+        <!-- This file is copy/pasted from avro 1.10.1 -->
+    <suppress files="org.apache.iceberg.avro.DataFileReaderFactory" checks="[a-zA-Z0-9]*"/>
 </suppressions>

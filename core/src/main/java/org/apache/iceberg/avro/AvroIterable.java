@@ -97,7 +97,7 @@ public class AvroIterable<D> extends CloseableGroup implements CloseableIterable
 
   private DataFileReader<D> newFileReader() {
     try {
-      return (DataFileReader<D>) DataFileReader.openReader(
+      return (DataFileReader<D>) DataFileReaderFactory.openReader(
           AvroIO.stream(file.newStream(), file.getLength()), reader);
     } catch (IOException e) {
       throw new RuntimeIOException(e, "Failed to open file: %s", file);
