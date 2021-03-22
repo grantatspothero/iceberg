@@ -111,9 +111,10 @@ subprojects {
           password project.hasProperty('mavenPassword') ? "$mavenPassword" : ""
         }
         // upload to the releases repository using ./gradlew -Prelease publish
-        def snapshotsRepoUrl = 'https://repository.apache.org/content/repositories/snapshots'
-        def releasesRepoUrl = 'https://repository.apache.org/service/local/staging/deploy/maven2'
-        url = project.hasProperty('release') ? releasesRepoUrl : snapshotsRepoUrl
+//        def snapshotsRepoUrl = 'https://repository.apache.org/content/repositories/snapshots'
+//        def releasesRepoUrl = 'https://repository.apache.org/service/local/staging/deploy/maven2'
+//        url = project.hasProperty('release') ? releasesRepoUrl : snapshotsRepoUrl
+        url = "http://nexus.kickthe.tires:8081/repository/spothero-private-maven/"
       }
     }
   }
