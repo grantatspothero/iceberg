@@ -109,25 +109,6 @@ public class ManifestFileUtil {
 
   public static boolean canContainAny(
       ManifestFile manifest,
-      Iterable<StructLike> partitions,
-      Function<Integer, PartitionSpec> specLookup) {
-    if (manifest.partitions() == null) {
-      return true;
-    }
-
-    List<FieldSummary<?>> summaries = summaries(manifest, specLookup);
-
-    for (StructLike partition : partitions) {
-      if (canContain(summaries, partition)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  public static boolean canContainAny(
-      ManifestFile manifest,
       Iterable<Pair<Integer, StructLike>> partitions,
       Map<Integer, PartitionSpec> specsById) {
     if (manifest.partitions() == null) {
