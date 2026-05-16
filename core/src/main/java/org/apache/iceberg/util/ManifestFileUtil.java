@@ -18,14 +18,13 @@
  */
 package org.apache.iceberg.util;
 
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
 import org.apache.iceberg.ManifestFile;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.StructLike;
-import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.types.Comparators;
 import org.apache.iceberg.types.Conversions;
 import org.apache.iceberg.types.Type;
@@ -34,72 +33,64 @@ import org.apache.iceberg.types.Types;
 public class ManifestFileUtil {
   private ManifestFileUtil() {}
 
-  private static class FieldSummary<T> {
-    private final Comparator<T> comparator;
-    private final Class<T> javaClass;
-    private final T lowerBound;
-    private final T upperBound;
-    private final boolean containsNull;
-    private final boolean containsNaN;
-    private final Type.PrimitiveType type;
+  // Sentinel indicating not yet decoded, separate from a decoded null
+  private static final Object UNSET = new Object();
 
-    @SuppressWarnings("unchecked")
-    FieldSummary(Type.PrimitiveType primitive, ManifestFile.PartitionFieldSummary summary) {
-      this.type = primitive;
-      this.comparator = Comparators.forType(primitive);
-      this.javaClass = (Class<T>) primitive.typeId().javaClass();
-      this.lowerBound = Conversions.fromByteBuffer(primitive, summary.lowerBound());
-      this.upperBound = Conversions.fromByteBuffer(primitive, summary.upperBound());
-      this.containsNull = summary.containsNull();
-      this.containsNaN = summary.containsNaN() == null ? true : summary.containsNaN();
-    }
-
-    boolean canContain(Object value) {
-      if (value == null) {
-        return containsNull;
-      }
-
-      if (NaNUtil.isNaN(value)) {
-        return containsNaN;
-      }
-
-      if (Types.UnknownType.get().equals(type)) {
-        return true;
-      }
-
-      // if lower bound is null, then there are no non-null values
-      if (lowerBound == null) {
-        // the value is non-null, so it cannot match
-        return false;
-      }
-
-      if (!javaClass.isInstance(value)) {
-        return false;
-      }
-
-      T typedValue = javaClass.cast(value);
-
-      if (comparator.compare(typedValue, lowerBound) < 0) {
-        return false;
-      }
-
-      if (comparator.compare(typedValue, upperBound) > 0) {
-        return false;
-      }
-
-      return true;
-    }
-  }
-
-  private static boolean canContain(List<FieldSummary<?>> summaries, StructLike struct) {
-    if (struct.size() != summaries.size()) {
+  private static boolean canContain(
+      List<Types.NestedField> fields,
+      List<ManifestFile.PartitionFieldSummary> fieldSummaries,
+      Object[] lower,
+      Object[] upper,
+      Comparator<Object>[] comparators,
+      StructLike struct) {
+    if (struct.size() != fieldSummaries.size()) {
       return false;
     }
 
-    // if any value is not contained, the struct is not contained and this can return early
-    for (int pos = 0; pos < summaries.size(); pos += 1) {
+    for (int pos = 0; pos < fieldSummaries.size(); pos += 1) {
+      ManifestFile.PartitionFieldSummary summary = fieldSummaries.get(pos);
       Object value = struct.get(pos, Object.class);
-      if (!summaries.get(pos).canContain(value)) {
+
+      if (value == null) {
+        if (!summary.containsNull()) {
+          return false;
+        }
+        continue;
+      }
+
+      if (NaNUtil.isNaN(value)) {
+        if (summary.containsNaN() != null && !summary.containsNaN()) {
+          return false;
+        }
+        continue;
+      }
+
+      Type.PrimitiveType primitive = fields.get(pos).type().asPrimitiveType();
+      if (primitive instanceof Types.UnknownType) {
+        continue;
+      }
+
+      Comparator<Object> comparator = comparators[pos];
+      if (comparator == null) {
+        comparator = Comparators.forType(primitive);
+        comparators[pos] = comparator;
+      }
+
+      Object lowerBound = lower[pos];
+      if (lowerBound == UNSET) {
+        lowerBound = Conversions.fromByteBuffer(primitive, summary.lowerBound());
+        lower[pos] = lowerBound;
+      }
+      if (lowerBound == null || comparator.compare(value, lowerBound) < 0) {
+        return false;
+      }
+
+      Object upperBound = upper[pos];
+      if (upperBound == UNSET) {
+        upperBound = Conversions.fromByteBuffer(primitive, summary.upperBound());
+        upper[pos] = upperBound;
+      }
+      if (upperBound == null || comparator.compare(value, upperBound) > 0) {
         return false;
       }
     }
@@ -111,34 +102,29 @@ public class ManifestFileUtil {
       ManifestFile manifest,
       Iterable<Pair<Integer, StructLike>> partitions,
       Map<Integer, PartitionSpec> specsById) {
-    if (manifest.partitions() == null) {
+    List<ManifestFile.PartitionFieldSummary> fieldSummaries = manifest.partitions();
+    if (fieldSummaries == null) {
       return true;
     }
 
-    List<FieldSummary<?>> summaries = summaries(manifest, specsById::get);
+    List<Types.NestedField> fields =
+        specsById.get(manifest.partitionSpecId()).partitionType().fields();
+
+    int n = fieldSummaries.size();
+    Object[] lower = new Object[n];
+    Object[] upper = new Object[n];
+    Comparator<Object>[] comparators = (Comparator<Object>[]) new Comparator<?>[n];
+    Arrays.fill(lower, UNSET);
+    Arrays.fill(upper, UNSET);
+    Arrays.fill(comparators, null);
 
     for (Pair<Integer, StructLike> partition : partitions) {
       if (partition.first() == manifest.partitionSpecId()
-          && canContain(summaries, partition.second())) {
+          && canContain(fields, fieldSummaries, lower, upper, comparators, partition.second())) {
         return true;
       }
     }
 
     return false;
-  }
-
-  private static List<FieldSummary<?>> summaries(
-      ManifestFile manifest, Function<Integer, PartitionSpec> specLookup) {
-    Types.StructType partitionType = specLookup.apply(manifest.partitionSpecId()).partitionType();
-    List<ManifestFile.PartitionFieldSummary> fieldSummaries = manifest.partitions();
-    List<Types.NestedField> fields = partitionType.fields();
-
-    List<FieldSummary<?>> summaries = Lists.newArrayListWithExpectedSize(fieldSummaries.size());
-    for (int pos = 0; pos < fieldSummaries.size(); pos += 1) {
-      Type.PrimitiveType primitive = fields.get(pos).type().asPrimitiveType();
-      summaries.add(new FieldSummary<>(primitive, fieldSummaries.get(pos)));
-    }
-
-    return summaries;
   }
 }
