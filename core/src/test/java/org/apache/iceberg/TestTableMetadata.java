@@ -66,6 +66,7 @@ import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
 import org.apache.iceberg.transforms.Transforms;
+import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 import org.apache.iceberg.util.JsonUtil;
 import org.junit.jupiter.api.Test;
@@ -2185,5 +2186,35 @@ public class TestTableMetadata {
             .setRef("tag1", SnapshotRef.tagBuilder(snapshot.snapshotId()).build())
             .build();
     assertThat(withTag.ref("tag1").isTag()).isTrue();
+  }
+
+  @Test
+  public void testPartitionSpecRetainsTypeForDroppedSourceColumnAfterSchemaChange() {
+    // Schema 0 has id + date_col; spec 0 is identity(date_col)
+    Schema schema0 =
+        new Schema(
+            Types.NestedField.required(1, "id", Types.LongType.get()),
+            Types.NestedField.optional(2, "date_col", Types.StringType.get()));
+    PartitionSpec spec0 =
+        PartitionSpec.builderFor(schema0).withSpecId(0).identity("date_col").build();
+
+    TableMetadata initial =
+        TableMetadata.newTableMetadata(schema0, spec0, TEST_LOCATION, ImmutableMap.of());
+
+    // Schema 1 drops date_col; switching to it triggers updateSpecSchema on spec 0.
+    // The partition field's source column is now gone
+    Schema schema1 =
+        new Schema(1, Types.NestedField.required(1, "id", Types.LongType.get()));
+
+    TableMetadata updated =
+        TableMetadata.buildFrom(initial)
+            .setCurrentSchema(schema1, 2)
+            .addPartitionSpec(PartitionSpec.unpartitioned())
+            .setDefaultPartitionSpec(-1)
+            .build();
+
+    // The old partition spec now has an unknown type due to the source column drop
+    assertThat(updated.spec(0).partitionType().fields().get(0).type().typeId())
+        .isEqualTo(Type.TypeID.UNKNOWN);
   }
 }
